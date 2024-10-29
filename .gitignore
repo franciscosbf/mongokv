@@ -1,0 +1,5 @@
+*.so
+*.o
+*.bc
+compile_commands.json
+.cache/
