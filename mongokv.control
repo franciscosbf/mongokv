@@ -1,0 +1,4 @@
+comment = 'PostgreSQL k/v store with MongoDB collections'
+default_version = '1.0.0'
+relocatable = true
+module_pathname = '$libdir/mongokv'
