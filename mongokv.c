@@ -101,7 +101,7 @@ void create_collection(const char* name, mongoc_collection_t **collection) {
   database_name = mongoc_uri_get_database(uri);
   *collection = mongoc_client_get_collection(client, database_name, name);
 
-  index_key = BCON_NEW("key", BCON_INT64(1));
+  index_key = BCON_NEW("key", BCON_INT32(1));
   index_model = mongoc_index_model_new(index_key, NULL);
   success = mongoc_collection_create_indexes_with_opts(*collection, &index_model,
                                                        1, NULL, NULL, &error);
@@ -145,8 +145,8 @@ text *bson_iter_utf8_to_text(const bson_iter_t *iter) {
   bson_t *selector = NULL; \
   bson_t *update = NULL; \
   bson_t *opts = NULL; \
-  bool success; \
   bson_error_t error; \
+  bool success; \
   \
   collection_name_cstring = text_to_cstring(COLLECTION_NAME_TEXT); \
   collection = fetch_collection(collection_name_cstring); \
@@ -162,9 +162,8 @@ text *bson_iter_utf8_to_text(const bson_iter_t *iter) {
   bson_destroy(update); \
   bson_destroy(opts); \
   pfree(key_cstring); \
-  if (!success) { \
-    elog(ERROR, "failed to put value: %s", error.message); \
-  }
+  if (!success) \
+    elog(ERROR, "failed to put value: %s", error.message);
 
 #define GET(COLLECTION_NAME_TEXT, \
             KEY_TEXT, \
@@ -372,4 +371,50 @@ Datum get_text(PG_FUNCTION_ARGS) {
   elog(INFO, "text returned with success");
 
   PG_RETURN_TEXT_P(value);
+}
+
+PG_FUNCTION_INFO_V1(remove_key);
+
+Datum remove_key(PG_FUNCTION_ARGS) {
+  text *collection_name = NULL;
+  text *key = NULL;
+  char *collection_name_cstring = NULL;
+  mongoc_collection_t *collection = NULL;
+  char *key_cstring = NULL;
+  bson_t *selector = NULL;
+  bson_t reply;
+  bson_error_t error;
+  bool success;
+  bson_iter_t iter;
+  bson_iter_t deleted_count;
+
+  collection_name = PG_GETARG_TEXT_PP(0);
+  key = PG_GETARG_TEXT_PP(1);
+
+  collection_name_cstring = text_to_cstring(collection_name);
+  collection = fetch_collection(collection_name_cstring);
+  pfree(collection_name_cstring);
+
+  key_cstring = text_to_cstring(key);
+
+  selector = BCON_NEW("key", BCON_UTF8(key_cstring));
+  success = mongoc_collection_delete_one(collection, selector, NULL, &reply, &error);
+  bson_destroy(selector);
+  if (!success)
+    elog(ERROR, "failed to remove key: %s", error.message);
+  if (!(bson_iter_init(&iter, &reply) &&
+      bson_iter_find_descendant(&iter, "deletedCount", &deleted_count) &&
+      BSON_ITER_HOLDS_INT32(&deleted_count))) {
+    bson_destroy(&reply);
+    elog(ERROR, "delete count somehow isn't present");
+  }
+  if (bson_iter_int32(&deleted_count) == 0) {
+    bson_destroy(&reply);
+    elog(ERROR, "key isn't present");
+  }
+  bson_destroy(&reply);
+
+  elog(INFO, "removed with success");
+
+  PG_RETURN_VOID();
 }
