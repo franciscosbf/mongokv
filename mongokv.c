@@ -37,7 +37,7 @@ void cleanup_connection(void) {
 }
 
 void init_collections_cache(void) {
-  collections_cache = g_hash_table_new(g_str_hash, g_str_equal);
+  collections_cache = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, NULL);
 }
 
 gboolean remove_collection(gpointer key, gpointer value, gpointer _) {
