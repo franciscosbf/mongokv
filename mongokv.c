@@ -2,36 +2,31 @@
 #include "mongoc/mongoc.h"
 #include "postgres.h"
 #include "fmgr.h"
-#include "utils/elog.h"
-#include "utils/hsearch.h"
 #include "utils/builtins.h"
+#include "glib-2.0/glib.h"
+#include "utils/elog.h"
 #include <stdbool.h>
 #include <stddef.h>
 #include <string.h>
 
 PG_MODULE_MAGIC;
 
-#define MAX_COLLECTION_NAME 12
-#define INITIAL_COLLECTIONS_CACHE_SZ 10
-
-typedef char collection_key[MAX_COLLECTION_NAME + 1 /* '\0' */];
-typedef struct {
-  mongoc_collection_t *collection;
-} collection_entry;
+#define MAX_COLLECTION_NAME 16
 
 void cleanup_connection(void);
 void init_collections_cache(void);
+gboolean remove_collection(gpointer key, gpointer value, gpointer _);
 void cleanup_collections_cache(void);
 void cleanup(void);
 void check_client(void);
-void to_collection_entry(const char *collection_name, collection_key *key);
-void create_collection(const collection_key *key,
-                       collection_entry *entry);
-mongoc_collection_t *fetch_collection(const char* collection_name);
+void check_collection_name(const char *name);
+void create_collection(const char *key, mongoc_collection_t **collection);
+mongoc_collection_t *fetch_collection(const char* name);
+text *bson_iter_utf8_to_text(const bson_iter_t *iter);
 
 static mongoc_client_t *client = NULL;
 static mongoc_uri_t *uri = NULL;
-static HTAB *collections_cache = NULL;
+static GHashTable *collections_cache = NULL;
 
 void cleanup_connection(void) {
   mongoc_client_destroy(client);
@@ -42,27 +37,28 @@ void cleanup_connection(void) {
 }
 
 void init_collections_cache(void) {
-  HASHCTL info = {
-    .keysize = sizeof(collection_key),
-    .entrysize = sizeof(collection_entry),
-  };
+  collections_cache = g_hash_table_new(g_str_hash, g_str_equal);
+}
 
-  collections_cache = hash_create("collections_cache", INITIAL_COLLECTIONS_CACHE_SZ,
-                                  &info, HASH_ELEM & HASH_BLOBS);
+gboolean remove_collection(gpointer key, gpointer value, gpointer _) {
+  char *name;
+  mongoc_collection_t *collection;
+
+  name = key;
+  collection = value;
+
+  pfree(name);
+  mongoc_collection_destroy(collection);
+
+  return true;
 }
 
 void cleanup_collections_cache(void) {
-  collection_entry *entry = NULL;
-  HASH_SEQ_STATUS status;
-
   if (!collections_cache)
     return;
 
-  hash_seq_init(&status, collections_cache);
-  while ((entry = hash_seq_search(&status)) != NULL)
-    mongoc_collection_destroy(entry->collection);
-
-  hash_destroy(collections_cache);
+  g_hash_table_foreach_remove(collections_cache, remove_collection, NULL);
+  g_hash_table_destroy(collections_cache);
   collections_cache = NULL;
 }
 
@@ -74,60 +70,72 @@ void cleanup(void) {
 
 void check_client(void) {
   if (!client)
-    elog(ERROR, "the client isn't created");
+    elog(ERROR, "client isn't initialized");
 }
 
-void to_collection_entry(const char *collection_name, collection_key *key) {
-  size_t sz = strlen(collection_name);
+void check_collection_name(const char *name) {
+  size_t sz;
+  char *current;
 
-  if (sz == 0)
-    elog(ERROR, "collection name can't be empty");
+  current = (char *)name;
+  while ((sz = current - name) < MAX_COLLECTION_NAME && *current != '\0')
+    current++;
 
-  if (sz > MAX_COLLECTION_NAME)
-    elog(ERROR, "collection name exceeds allowed max: %d characters", MAX_COLLECTION_NAME);
-
-  *(char*)mempcpy(*key, collection_name, sz) = '\0';
+  switch (sz) {
+    case 0: case MAX_COLLECTION_NAME:
+      pfree((char *)name);
+      elog(ERROR, "collection name must be non empty and with %d characters max",
+          MAX_COLLECTION_NAME);
+  }
 }
 
-void create_collection(const collection_key *key,
-                       collection_entry *entry) {
+void create_collection(const char* name, mongoc_collection_t **collection) {
   const char *database_name = NULL;
   bson_t *index_key = NULL;
   mongoc_index_model_t *index_model = NULL;
   bson_error_t error;
   bool success;
-  bool found;
+  Size name_sz;
+  char *_name;
 
   database_name = mongoc_uri_get_database(uri);
-  entry->collection = mongoc_client_get_collection(client, database_name, *key);
+  *collection = mongoc_client_get_collection(client, database_name, name);
 
   index_key = BCON_NEW("key", BCON_INT64(1));
   index_model = mongoc_index_model_new(index_key, NULL);
-  success = mongoc_collection_create_indexes_with_opts(entry->collection, &index_model,
-                                                        1, NULL, NULL, &error);
+  success = mongoc_collection_create_indexes_with_opts(*collection, &index_model,
+                                                       1, NULL, NULL, &error);
   mongoc_index_model_destroy(index_model);
   bson_destroy(index_key);
   if (!success) {
-    mongoc_collection_destroy(entry->collection);
-
-    hash_search(collections_cache, &key, HASH_REMOVE, &found);
-
+    mongoc_collection_destroy(*collection);
+    pfree((char *)name);
     elog(ERROR, "failed to create index for collection: %s", error.message);
   }
+
+  name_sz = strlen(name) + 1;
+  _name = palloc(name_sz);
+  *(char *)mempcpy(_name, name, name_sz) = '\0';
+  g_hash_table_insert(collections_cache, _name, *collection);
 }
 
-mongoc_collection_t *fetch_collection(const char* collection_name) {
-  collection_key key = {0};
-  bool found;
-  collection_entry *entry = NULL;
+mongoc_collection_t *fetch_collection(const char* name) {
+  mongoc_collection_t *collection;
 
-  to_collection_entry(collection_name, &key);
+  check_collection_name(name);
 
-  entry = hash_search(collections_cache, &key, HASH_ENTER, &found);
-  if (!found)
-    create_collection(&key, entry);
+  if ((collection = g_hash_table_lookup(collections_cache, name)) == NULL)
+    create_collection(name, &collection);
 
-  return entry->collection;
+  return collection;
+}
+
+text *bson_iter_utf8_to_text(const bson_iter_t *iter) {
+  const char *value;
+
+  value = bson_iter_utf8(iter, 0);
+
+  return cstring_to_text(value);
 }
 
 #define UPSERT(COLLECTION_NAME_TEXT, KEY_TEXT, VALUE_BCON) \
@@ -142,6 +150,7 @@ mongoc_collection_t *fetch_collection(const char* collection_name) {
   \
   collection_name_cstring = text_to_cstring(COLLECTION_NAME_TEXT); \
   collection = fetch_collection(collection_name_cstring); \
+  pfree(collection_name_cstring); \
   \
   key_cstring = text_to_cstring(KEY_TEXT); \
   \
@@ -152,6 +161,7 @@ mongoc_collection_t *fetch_collection(const char* collection_name) {
   bson_destroy(selector); \
   bson_destroy(update); \
   bson_destroy(opts); \
+  pfree(key_cstring); \
   if (!success) { \
     elog(ERROR, "failed to put value: %s", error.message); \
   }
@@ -171,16 +181,17 @@ mongoc_collection_t *fetch_collection(const char* collection_name) {
   bson_t *doc; \
   bson_error_t error; \
   bson_iter_t iter; \
-  const char *error_message = NULL; \
   \
   collection_name_cstring = text_to_cstring(COLLECTION_NAME_TEXT); \
   collection = fetch_collection(collection_name_cstring); \
+  pfree(collection_name_cstring); \
   \
   key_cstring = text_to_cstring(KEY_TEXT); \
   \
   filter = BCON_NEW("key", BCON_UTF8(key_cstring)); \
   cursor = mongoc_collection_find_with_opts(collection, filter, NULL, NULL); \
   bson_destroy(filter); \
+  pfree(key_cstring); \
   found = mongoc_cursor_next(cursor, (const bson_t **)&doc); \
   with_error = mongoc_cursor_error(cursor, &error); \
   mongoc_cursor_destroy(cursor); \
@@ -316,4 +327,49 @@ Datum get_int8(PG_FUNCTION_ARGS) {
   elog(INFO, "int8 returned with success");
 
   PG_RETURN_INT64(value);
+}
+
+PG_FUNCTION_INFO_V1(put_text);
+
+Datum put_text(PG_FUNCTION_ARGS) {
+  text *collection_name = NULL;
+  text *key = NULL;
+  text *value;
+  char *value_cstring;
+
+  check_client();
+
+  collection_name = PG_GETARG_TEXT_PP(0);
+  key = PG_GETARG_TEXT_PP(1);
+  value = PG_GETARG_TEXT_PP(2);
+
+  value_cstring = text_to_cstring(value);
+  UPSERT(collection_name, key, BCON_UTF8(value_cstring));
+
+  elog(INFO, "text stored with success");
+
+  PG_RETURN_VOID();
+}
+
+PG_FUNCTION_INFO_V1(get_text);
+
+Datum get_text(PG_FUNCTION_ARGS) {
+  text *collection_name = NULL;
+  text *key = NULL;
+  text *value;
+
+  check_client();
+
+  collection_name = PG_GETARG_TEXT_PP(0);
+  key = PG_GETARG_TEXT_PP(1);
+
+  GET(collection_name,
+      key,
+      BSON_ITER_HOLDS_UTF8,
+      bson_iter_utf8_to_text,
+      value);
+
+  elog(INFO, "text returned with success");
+
+  PG_RETURN_TEXT_P(value);
 }
