@@ -50,7 +50,7 @@ gboolean remove_collection(gpointer key, gpointer value, gpointer _) {
   pfree(name);
   mongoc_collection_destroy(collection);
 
-  return true;
+  return TRUE;
 }
 
 void cleanup_collections_cache(void) {
