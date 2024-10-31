@@ -253,3 +253,9 @@ Datum put_int8(PG_FUNCTION_ARGS) {
 
   PG_RETURN_VOID();
 }
+
+PG_FUNCTION_INFO_V1(get_int8);
+
+Datum get_int8(PG_FUNCTION_ARGS) {
+  PG_RETURN_INT64(0);
+}
