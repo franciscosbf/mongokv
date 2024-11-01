@@ -198,7 +198,7 @@ text *bson_iter_utf8_to_text(const bson_iter_t *iter) {
     if (with_error) \
       elog(ERROR, "failed to find key: %s", error.message); \
     else \
-      elog(ERROR, "key doesn't exist"); \
+      PG_RETURN_NULL(); \
   } \
   \
   if (!bson_iter_init_find(&iter, doc, "value")) { \
@@ -235,7 +235,7 @@ Datum create_client(PG_FUNCTION_ARGS) {
   dns = PG_GETARG_TEXT_PP(0);
 
   if (client)
-    elog(ERROR, "client is already created");
+    PG_RETURN_BOOL(false);
 
   dns_cstring = text_to_cstring(dns);
 
@@ -268,21 +268,18 @@ Datum create_client(PG_FUNCTION_ARGS) {
 
   init_collections_cache();
 
-  elog(INFO, "client has been created");
-
-  PG_RETURN_VOID();
+  PG_RETURN_BOOL(true);
 }
 
 PG_FUNCTION_INFO_V1(destroy_client);
 
 Datum destroy_client(PG_FUNCTION_ARGS) {
-  check_client();
+  if (!client)
+    PG_RETURN_BOOL(false);
 
   cleanup();
 
-  elog(INFO, "client was destroyed");
-
-  PG_RETURN_VOID();
+  PG_RETURN_BOOL(true);
 }
 
 PG_FUNCTION_INFO_V1(put_int8);
@@ -387,6 +384,7 @@ Datum remove_key(PG_FUNCTION_ARGS) {
   bool success;
   bson_iter_t iter;
   bson_iter_t deleted_count;
+  bool deleted;
 
   collection_name = PG_GETARG_TEXT_PP(0);
   key = PG_GETARG_TEXT_PP(1);
@@ -401,20 +399,15 @@ Datum remove_key(PG_FUNCTION_ARGS) {
   success = mongoc_collection_delete_one(collection, selector, NULL, &reply, &error);
   bson_destroy(selector);
   if (!success)
-    elog(ERROR, "failed to remove key: %s", error.message);
+    elog(ERROR, "failed while trying to remove key: %s", error.message);
   if (!(bson_iter_init(&iter, &reply) &&
       bson_iter_find_descendant(&iter, "deletedCount", &deleted_count) &&
       BSON_ITER_HOLDS_INT32(&deleted_count))) {
     bson_destroy(&reply);
     elog(ERROR, "delete count somehow isn't present");
   }
-  if (bson_iter_int32(&deleted_count) == 0) {
-    bson_destroy(&reply);
-    elog(ERROR, "key isn't present");
-  }
+  deleted = bson_iter_int32(&deleted_count) == 1;
   bson_destroy(&reply);
 
-  elog(INFO, "removed with success");
-
-  PG_RETURN_VOID();
+  PG_RETURN_BOOL(deleted);
 }

@@ -1,8 +1,8 @@
-CREATE OR REPLACE FUNCTION create_client(text) RETURNS void
+CREATE OR REPLACE FUNCTION create_client(text) RETURNS boolean
 AS 'MODULE_PATHNAME', 'create_client'
 LANGUAGE C STRICT;
 
-CREATE OR REPLACE FUNCTION destroy_client() RETURNS void
+CREATE OR REPLACE FUNCTION destroy_client() RETURNS boolean
 AS 'MODULE_PATHNAME', 'destroy_client'
 LANGUAGE C STRICT;
 
@@ -22,6 +22,6 @@ CREATE OR REPLACE FUNCTION get_text(text, text) RETURNS text
 AS 'MODULE_PATHNAME', 'get_text'
 LANGUAGE C STRICT;
 
-CREATE OR REPLACE FUNCTION remove_key(text, text) RETURNS void
+CREATE OR REPLACE FUNCTION remove_key(text, text) RETURNS boolean
 AS 'MODULE_PATHNAME', 'remove_key'
 LANGUAGE C STRICT;
