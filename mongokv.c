@@ -297,9 +297,7 @@ Datum put_int8(PG_FUNCTION_ARGS) {
 
   UPSERT(collection_name, key, BCON_INT64(value));
 
-  elog(INFO, "int8 stored with success");
-
-  PG_RETURN_VOID();
+  PG_RETURN_INT64(value);
 }
 
 PG_FUNCTION_INFO_V1(get_int8);
@@ -319,8 +317,6 @@ Datum get_int8(PG_FUNCTION_ARGS) {
       BSON_ITER_HOLDS_INT64,
       bson_iter_int64,
       value);
-
-  elog(INFO, "int8 returned with success");
 
   PG_RETURN_INT64(value);
 }
@@ -342,9 +338,7 @@ Datum put_text(PG_FUNCTION_ARGS) {
   value_cstring = text_to_cstring(value);
   UPSERT(collection_name, key, BCON_UTF8(value_cstring));
 
-  elog(INFO, "text stored with success");
-
-  PG_RETURN_VOID();
+  PG_RETURN_TEXT_P(value);
 }
 
 PG_FUNCTION_INFO_V1(get_text);
@@ -365,14 +359,12 @@ Datum get_text(PG_FUNCTION_ARGS) {
       bson_iter_utf8_to_text,
       value);
 
-  elog(INFO, "text returned with success");
-
   PG_RETURN_TEXT_P(value);
 }
 
-PG_FUNCTION_INFO_V1(remove_key);
+PG_FUNCTION_INFO_V1(delete_key);
 
-Datum remove_key(PG_FUNCTION_ARGS) {
+Datum delete_key(PG_FUNCTION_ARGS) {
   text *collection_name = NULL;
   text *key = NULL;
   char *collection_name_cstring = NULL;
