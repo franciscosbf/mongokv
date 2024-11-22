@@ -1,0 +1,16 @@
+services:
+  mongo:
+    image: mongo:8.0.3
+    container_name: mongo
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=admin
+      - MONGO_INITDB_ROOT_PASSWORD=admin
+    networks:
+      - mongo
+    hostname: mongo
+    ports:
+      - 27017:27017
+
+networks:
+  mongo:
+    name: mongo
